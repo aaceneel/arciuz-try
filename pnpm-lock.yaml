@@ -209,6 +209,9 @@ dependencies:
   usehooks-ts:
     specifier: ^3.1.0
     version: 3.1.1(react@19.0.0-rc-45804af1-20241021)
+  wavesurfer.js:
+    specifier: ^7.10.1
+    version: 7.10.1
   zod:
     specifier: ^3.25.68
     version: 3.25.76
@@ -7258,6 +7261,10 @@ packages:
 
   /w3c-keyname@2.2.8:
     resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
+    dev: false
+
+  /wavesurfer.js@7.10.1:
+    resolution: {integrity: sha512-tF1ptFCAi8SAqKbM1e7705zouLC3z4ulXCg15kSP5dQ7VDV30Q3x/xFRcuVIYTT5+jB/PdkhiBRCfsMshZG1Ug==}
     dev: false
 
   /which-boxed-primitive@1.1.1:

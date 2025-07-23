@@ -28,6 +28,7 @@ import { ArrowDown } from 'lucide-react';
 import { useScrollToBottom } from '@/hooks/use-scroll-to-bottom';
 import type { VisibilityType } from './visibility-selector';
 import type { Attachment, ChatMessage } from '@/lib/types';
+import WaveSurfer from 'wavesurfer.js';
 
 function PureMultimodalInput({
   chatId,
@@ -207,6 +208,10 @@ function PureMultimodalInput({
     }
   }, [status, scrollToBottom]);
 
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedAudio, setRecordedAudio] = useState<Blob | null>(null);
+  const [transcript, setTranscript] = useState('');
+
   return (
     <div className="relative w-full flex flex-col gap-4">
       <AnimatePresence>
@@ -314,7 +319,16 @@ function PureMultimodalInput({
           <StopButton stop={stop} setMessages={setMessages} />
         ) : (
           <>
-            <VoiceToggleButton setInput={setInput} />
+            {!isRecording ? (
+              <VoiceToggleButton setIsRecording={setIsRecording} />
+            ) : (
+              <RecordingWaveform
+                setIsRecording={setIsRecording}
+                setInput={setInput}
+                setTranscript={setTranscript}
+                setRecordedAudio={setRecordedAudio}
+              />
+            )}
             <SendButton
               input={input}
               submitForm={submitForm}
@@ -421,58 +435,158 @@ const SendButton = memo(PureSendButton, (prevProps, nextProps) => {
 });
 
 const VoiceToggleButton = ({
+  setIsRecording,
+}: { setIsRecording: (v: boolean) => void }) => (
+  <Button
+    data-testid="voice-toggle-button"
+    className="rounded-full p-1.5 h-fit border dark:border-zinc-600 mr-2"
+    variant="outline"
+    type="button"
+    onClick={() => setIsRecording(true)}
+  >
+    <MicIcon size={18} />
+  </Button>
+);
+
+const RecordingWaveform = ({
+  setIsRecording,
   setInput,
-}: { setInput: Dispatch<SetStateAction<string>> }) => {
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
+  setTranscript,
+  setRecordedAudio,
+}: {
+  setIsRecording: (v: boolean) => void;
+  setInput: (v: string) => void;
+  setTranscript: (v: string) => void;
+  setRecordedAudio: (v: Blob | null) => void;
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunks = useRef<Blob[]>([]);
+  const animationRef = useRef<number>();
+  const [isListening, setIsListening] = useState(true);
+  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const [source, setSource] = useState<MediaStreamAudioSourceNode | null>(null);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).webkitSpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
+    let stream: MediaStream;
+    let ctx: AudioContext;
+    let analyserNode: AnalyserNode;
+    let src: MediaStreamAudioSourceNode;
 
-      recognitionRef.current.onresult = (event: any) => {
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          transcript += event.results[i][0].transcript;
+    const startRecording = async () => {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      ctx = new window.AudioContext();
+      analyserNode = ctx.createAnalyser();
+      src = ctx.createMediaStreamSource(stream);
+      src.connect(analyserNode);
+      setAudioContext(ctx);
+      setAnalyser(analyserNode);
+      setSource(src);
+
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunks.current = [];
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.current.push(e.data);
+      };
+      mediaRecorderRef.current.start();
+      drawWaveform(analyserNode);
+    };
+    startRecording();
+    return () => {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== 'inactive'
+      ) {
+        mediaRecorderRef.current.stop();
+      }
+      if (ctx) ctx.close();
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  const drawWaveform = (analyserNode: AnalyserNode) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const bufferLength = analyserNode.fftSize;
+    const dataArray = new Uint8Array(bufferLength);
+    const draw = () => {
+      analyserNode.getByteTimeDomainData(dataArray);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+      const sliceWidth = (canvas.width * 1.0) / bufferLength;
+      let x = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const v = dataArray[i] / 128.0;
+        const y = (v * canvas.height) / 2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+        x += sliceWidth;
+      }
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      animationRef.current = requestAnimationFrame(draw);
+    };
+    draw();
+  };
+
+  const handleCancel = () => {
+    setIsListening(false);
+    setIsRecording(false);
+    setRecordedAudio(null);
+  };
+
+  const handleConfirm = async () => {
+    setIsListening(false);
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== 'inactive'
+    ) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.onstop = async () => {
+        const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
+        setRecordedAudio(audioBlob);
+        // Use Web Speech API for transcription if available
+        if ('webkitSpeechRecognition' in window) {
+          const recognition = new (window as any).webkitSpeechRecognition();
+          recognition.lang = 'en-US';
+          recognition.onresult = (event: any) => {
+            let transcript = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+              transcript += event.results[i][0].transcript;
+            }
+            setTranscript(transcript);
+            setInput(transcript);
+            setIsRecording(false);
+          };
+          recognition.onerror = () => setIsRecording(false);
+          recognition.onend = () => setIsRecording(false);
+          recognition.start();
+        } else {
+          setIsRecording(false);
         }
-        setInput(transcript);
       };
-
-      recognitionRef.current.onend = () => {
-        setListening(false);
-      };
-    }
-  }, [setInput]);
-
-  const handleToggle = () => {
-    if (!recognitionRef.current) return;
-    if (listening) {
-      recognitionRef.current.stop();
-      setListening(false);
     } else {
-      recognitionRef.current.start();
-      setListening(true);
+      setIsRecording(false);
     }
   };
 
   return (
-    <Button
-      data-testid="voice-toggle-button"
-      className={`rounded-full p-1.5 h-fit border dark:border-zinc-600 mr-2 ${listening ? 'bg-green-200 dark:bg-green-900' : ''}`}
-      variant="outline"
-      type="button"
-      onClick={handleToggle}
-    >
-      <MicIcon size={18} />
-      {listening && (
-        <span className="ml-1 text-xs text-green-700 dark:text-green-300">
-          Listening...
-        </span>
-      )}
-    </Button>
+    <div className="flex flex-col items-center justify-center w-full h-32 bg-zinc-800 rounded-2xl p-4 relative">
+      <canvas ref={canvasRef} width={600} height={60} className="w-full h-16" />
+      <div className="flex flex-row gap-4 mt-4 justify-center items-center">
+        <Button variant="ghost" onClick={handleCancel} className="text-2xl">
+          ×
+        </Button>
+        <Button variant="ghost" onClick={handleConfirm} className="text-2xl">
+          ✓
+        </Button>
+      </div>
+    </div>
   );
 };
