@@ -463,16 +463,15 @@ const RecordingWaveform = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
   const animationRef = useRef<number>();
-  const [isListening, setIsListening] = useState(true);
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
-  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
-  const [source, setSource] = useState<MediaStreamAudioSourceNode | null>(null);
+  const [transcript, setLocalTranscript] = useState('');
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     let stream: MediaStream;
     let ctx: AudioContext;
     let analyserNode: AnalyserNode;
     let src: MediaStreamAudioSourceNode;
+    let stopped = false;
 
     const startRecording = async () => {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -480,10 +479,6 @@ const RecordingWaveform = ({
       analyserNode = ctx.createAnalyser();
       src = ctx.createMediaStreamSource(stream);
       src.connect(analyserNode);
-      setAudioContext(ctx);
-      setAnalyser(analyserNode);
-      setSource(src);
-
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunks.current = [];
       mediaRecorderRef.current.ondataavailable = (e) => {
@@ -491,9 +486,28 @@ const RecordingWaveform = ({
       };
       mediaRecorderRef.current.start();
       drawWaveform(analyserNode);
+
+      // Live transcription
+      if ('webkitSpeechRecognition' in window) {
+        const recognition = new (window as any).webkitSpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        recognition.onresult = (event: any) => {
+          let liveTranscript = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            liveTranscript += event.results[i][0].transcript;
+          }
+          setLocalTranscript(liveTranscript);
+        };
+        recognition.onerror = () => {};
+        recognitionRef.current = recognition;
+        recognition.start();
+      }
     };
     startRecording();
     return () => {
+      stopped = true;
       if (
         mediaRecorderRef.current &&
         mediaRecorderRef.current.state !== 'inactive'
@@ -503,6 +517,7 @@ const RecordingWaveform = ({
       if (ctx) ctx.close();
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
       if (stream) stream.getTracks().forEach((track) => track.stop());
+      if (recognitionRef.current) recognitionRef.current.stop();
     };
   }, []);
 
@@ -511,6 +526,7 @@ const RecordingWaveform = ({
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    analyserNode.fftSize = 2048;
     const bufferLength = analyserNode.fftSize;
     const dataArray = new Uint8Array(bufferLength);
     const draw = () => {
@@ -536,56 +552,50 @@ const RecordingWaveform = ({
   };
 
   const handleCancel = () => {
-    setIsListening(false);
+    if (recognitionRef.current) recognitionRef.current.stop();
     setIsRecording(false);
     setRecordedAudio(null);
+    setTranscript('');
+    setInput('');
   };
 
-  const handleConfirm = async () => {
-    setIsListening(false);
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== 'inactive'
-    ) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
-        setRecordedAudio(audioBlob);
-        // Use Web Speech API for transcription if available
-        if ('webkitSpeechRecognition' in window) {
-          const recognition = new (window as any).webkitSpeechRecognition();
-          recognition.lang = 'en-US';
-          recognition.onresult = (event: any) => {
-            let transcript = '';
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-              transcript += event.results[i][0].transcript;
-            }
-            setTranscript(transcript);
-            setInput(transcript);
-            setIsRecording(false);
-          };
-          recognition.onerror = () => setIsRecording(false);
-          recognition.onend = () => setIsRecording(false);
-          recognition.start();
-        } else {
-          setIsRecording(false);
-        }
-      };
-    } else {
-      setIsRecording(false);
-    }
+  const handleConfirm = () => {
+    if (recognitionRef.current) recognitionRef.current.stop();
+    setIsRecording(false);
+    setTranscript(transcript);
+    setInput(transcript);
   };
 
   return (
-    <div className="flex flex-col items-center justify-center w-full h-32 bg-zinc-800 rounded-2xl p-4 relative">
-      <canvas ref={canvasRef} width={600} height={60} className="w-full h-16" />
-      <div className="flex flex-row gap-4 mt-4 justify-center items-center">
-        <Button variant="ghost" onClick={handleCancel} className="text-2xl">
-          ×
-        </Button>
-        <Button variant="ghost" onClick={handleConfirm} className="text-2xl">
-          ✓
-        </Button>
+    <div className="relative w-full flex flex-col gap-4">
+      <div className="min-h-[24px] max-h-[calc(75dvh)] overflow-hidden resize-none rounded-2xl !text-base bg-muted pb-10 dark:border-zinc-700 flex flex-col items-center justify-center p-4">
+        <div className="w-full text-center text-base text-white mb-2 min-h-[24px]">
+          {transcript || <span className="text-zinc-400">Listening...</span>}
+        </div>
+        <canvas
+          ref={canvasRef}
+          width={600}
+          height={60}
+          className="w-full h-16"
+        />
+        <div className="flex flex-row gap-4 mt-4 justify-center items-center">
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={handleCancel}
+            className="text-2xl"
+          >
+            ×
+          </Button>
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={handleConfirm}
+            className="text-2xl"
+          >
+            ✓
+          </Button>
+        </div>
       </div>
     </div>
   );
