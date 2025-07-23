@@ -16,7 +16,7 @@ import {
 import { toast } from 'sonner';
 import { useLocalStorage, useWindowSize } from 'usehooks-ts';
 
-import { ArrowUpIcon, PaperclipIcon, StopIcon } from './icons';
+import { ArrowUpIcon, PaperclipIcon, StopIcon, MicIcon } from './icons';
 import { PreviewAttachment } from './preview-attachment';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
@@ -313,11 +313,14 @@ function PureMultimodalInput({
         {status === 'submitted' ? (
           <StopButton stop={stop} setMessages={setMessages} />
         ) : (
-          <SendButton
-            input={input}
-            submitForm={submitForm}
-            uploadQueue={uploadQueue}
-          />
+          <>
+            <VoiceToggleButton setInput={setInput} />
+            <SendButton
+              input={input}
+              submitForm={submitForm}
+              uploadQueue={uploadQueue}
+            />
+          </>
         )}
       </div>
     </div>
@@ -416,3 +419,60 @@ const SendButton = memo(PureSendButton, (prevProps, nextProps) => {
   if (prevProps.input !== nextProps.input) return false;
   return true;
 });
+
+const VoiceToggleButton = ({
+  setInput,
+}: { setInput: Dispatch<SetStateAction<string>> }) => {
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
+      const SpeechRecognition = (window as any).webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          transcript += event.results[i][0].transcript;
+        }
+        setInput(transcript);
+      };
+
+      recognitionRef.current.onend = () => {
+        setListening(false);
+      };
+    }
+  }, [setInput]);
+
+  const handleToggle = () => {
+    if (!recognitionRef.current) return;
+    if (listening) {
+      recognitionRef.current.stop();
+      setListening(false);
+    } else {
+      recognitionRef.current.start();
+      setListening(true);
+    }
+  };
+
+  return (
+    <Button
+      data-testid="voice-toggle-button"
+      className={`rounded-full p-1.5 h-fit border dark:border-zinc-600 mr-2 ${listening ? 'bg-green-200 dark:bg-green-900' : ''}`}
+      variant="outline"
+      type="button"
+      onClick={handleToggle}
+    >
+      <MicIcon size={18} />
+      {listening && (
+        <span className="ml-1 text-xs text-green-700 dark:text-green-300">
+          Listening...
+        </span>
+      )}
+    </Button>
+  );
+};
